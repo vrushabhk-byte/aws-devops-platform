@@ -1,6 +1,12 @@
 pipeline {
     agent any
 
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+        timeout(time: 30, unit: 'MINUTES')
+    }
+
     environment {
         K8S_NAMESPACE       = 'production'
         IMAGE_NAME          = 'aws-devops-platform'
@@ -10,15 +16,21 @@ pipeline {
         MONITORING_NAMESPACE = 'monitoring'
     }
 
-    options {
-        timestamps()
-        disableConcurrentBuilds()
-    }
-
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
+
+                sh '''
+                    set -eu
+
+                    echo "=== Current Git Commit ==="
+                    git log -1 --oneline
+
+                    echo "=== Project Files ==="
+                    ls -la
+                '''
             }
         }
 
@@ -42,18 +54,19 @@ pipeline {
                     echo "=== Python ==="
                     python3 --version
 
-                    echo "=== Pytest ==="
-                    python3 -m pytest --version
+                    echo "=== pip ==="
+                    python3 -m pip --version
 
                     echo "=== kubectl ==="
-                    kubectl --kubeconfig="$KUBECONFIG" version --client
+                    kubectl version --client
 
-                    echo "=== Kind cluster ==="
-                    kind get clusters
+                    echo "=== Kind ==="
+                    kind version
 
-                    echo "=== Kubernetes nodes ==="
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    echo "=== Verify Kind Cluster ==="
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         get nodes
                 '''
             }
@@ -64,20 +77,15 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Installing application dependencies ==="
-
-                    python3 -m pip install \
-                        --break-system-packages \
-                        -r requirements.txt
-
-                    echo "=== Installing development dependencies ==="
-
+                    echo "=== Install Python Dependencies ==="
                     python3 -m pip install \
                         --break-system-packages \
                         -r requirements-dev.txt
 
-                    echo "=== Running pytest ==="
+                    echo "=== Verify pytest ==="
+                    python3 -m pytest --version
 
+                    echo "=== Run Unit Tests ==="
                     python3 -m pytest -v
                 '''
             }
@@ -88,7 +96,7 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Scanning source code with Trivy ==="
+                    echo "=== Scan Source Code and Configuration ==="
 
                     trivy fs \
                         --scanners vuln,misconfig,secret \
@@ -107,12 +115,18 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Building Docker image ==="
+                    echo "=== Build Application Image ==="
 
                     docker build \
-                        --pull=false \
-                        -t "$IMAGE_NAME:$IMAGE_TAG" \
+                        --pull \
+                        -t "${IMAGE_NAME}:${IMAGE_TAG}" \
                         .
+
+                    echo "=== Verify Built Image ==="
+
+                    docker image inspect \
+                        "${IMAGE_NAME}:${IMAGE_TAG}" \
+                        --format='Image ID: {{.Id}}'
                 '''
             }
         }
@@ -122,13 +136,13 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Scanning Docker image with Trivy ==="
+                    echo "=== Scan Docker Image ==="
 
                     trivy image \
-                        --scanners vuln \
+                        --scanners vuln,misconfig,secret \
                         --severity HIGH,CRITICAL \
                         --exit-code 1 \
-                        "$IMAGE_NAME:$IMAGE_TAG"
+                        "${IMAGE_NAME}:${IMAGE_TAG}"
                 '''
             }
         }
@@ -138,11 +152,18 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Loading image into Kind ==="
+                    echo "=== Load Docker Image into Kind ==="
 
                     kind load docker-image \
-                        "$IMAGE_NAME:$IMAGE_TAG" \
-                        --name "$KIND_CLUSTER"
+                        "${IMAGE_NAME}:${IMAGE_TAG}" \
+                        --name "${KIND_CLUSTER}"
+
+                    echo "=== Verify Kind Cluster ==="
+
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        get nodes
                 '''
             }
         }
@@ -152,34 +173,47 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Applying Kubernetes manifests ==="
+                    echo "=== Create Application Namespace ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        apply -f k8s/
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        create namespace "${K8S_NAMESPACE}" \
+                        --dry-run=client \
+                        -o yaml | kubectl apply -f -
 
-                    echo "=== Waiting for application rollout ==="
+                    echo "=== Apply Kubernetes Manifests ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        apply -n "${K8S_NAMESPACE}" -f k8s/
+
+                    echo "=== Update Deployment Image ==="
+
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        set image deployment/flask-api \
+                        flask-api="${IMAGE_NAME}:${IMAGE_TAG}" \
+                        -n "${K8S_NAMESPACE}"
+
+                    echo "=== Wait for Deployment Rollout ==="
+
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         rollout status deployment/flask-api \
-                        --namespace "$K8S_NAMESPACE" \
+                        -n "${K8S_NAMESPACE}" \
                         --timeout=180s
 
-                    echo "=== Application pods ==="
+                    echo "=== Application Resources ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        get pods \
-                        --namespace "$K8S_NAMESPACE" \
-                        -o wide
-
-                    echo "=== Application service ==="
-
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        get service flask-api \
-                        --namespace "$K8S_NAMESPACE"
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        get deployments,pods,services \
+                        -n "${K8S_NAMESPACE}"
                 '''
             }
         }
@@ -189,34 +223,25 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Checking monitoring namespace ==="
+                    echo "=== Verify Monitoring Namespace ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        get namespace "$MONITORING_NAMESPACE"
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        get namespace "${MONITORING_NAMESPACE}"
 
-                    echo "=== Checking ServiceMonitor CRD ==="
+                    echo "=== Apply ServiceMonitor ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        get crd servicemonitors.monitoring.coreos.com
-
-                    echo "=== Checking PrometheusRule CRD ==="
-
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        get crd prometheusrules.monitoring.coreos.com
-
-                    echo "=== Applying ServiceMonitor ==="
-
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         apply -f monitoring/flask-servicemonitor.yaml
 
-                    echo "=== Applying Prometheus alert rules ==="
+                    echo "=== Apply Prometheus Alert Rules ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         apply -f monitoring/alerts/flask-alerts.yaml
                 '''
             }
@@ -227,30 +252,30 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Verifying ServiceMonitor ==="
+                    echo "=== Verify ServiceMonitor ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         get servicemonitor flask-api \
-                        --namespace "$MONITORING_NAMESPACE" \
-                        -o yaml
+                        -n "${MONITORING_NAMESPACE}"
 
-                    echo "=== Verifying PrometheusRule ==="
+                    echo "=== Verify PrometheusRule ==="
 
-                    # Must match metadata.name in flask-alerts.yaml.
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         get prometheusrule flask-application-alerts \
-                        --namespace "$MONITORING_NAMESPACE" \
-                        -o yaml
+                        -n "${MONITORING_NAMESPACE}"
 
-                    echo "=== Listing configured alert names ==="
+                    echo "=== Configured Alert Rules ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
                         get prometheusrule flask-application-alerts \
-                        --namespace "$MONITORING_NAMESPACE" \
-                        -o jsonpath='{range .spec.groups[*].rules[*]}{.alert}{"\\n"}{end}'
+                        -n "${MONITORING_NAMESPACE}" \
+                        -o jsonpath='{range .spec.groups[*]}Group: {.name}{"\\n"}{range .rules[*]}  Alert: {.alert}{"\\n"}{end}{end}'
                 '''
             }
         }
@@ -260,23 +285,38 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Testing Flask health endpoint ==="
+                    echo "=== Verify Application Service ==="
 
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        run flask-smoke-test \
-                        --namespace "$K8S_NAMESPACE" \
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        get service flask-api \
+                        -n "${K8S_NAMESPACE}"
+
+                    echo "=== Test Application Health Endpoint ==="
+
+                    kubectl \
+                        --kubeconfig="${KUBECONFIG}" \
+                        --context="kind-${KIND_CLUSTER}" \
+                        run "flask-api-smoke-${BUILD_NUMBER}" \
+                        --namespace="${K8S_NAMESPACE}" \
                         --image=curlimages/curl:8.12.1 \
                         --restart=Never \
                         --rm \
                         -i \
                         --quiet \
                         --command -- \
-                        curl --fail --silent --show-error \
-                        --max-time 10 \
-                        http://flask-api/health
+                        curl \
+                            --fail \
+                            --silent \
+                            --show-error \
+                            --retry 10 \
+                            --retry-connrefused \
+                            --retry-delay 2 \
+                            http://flask-api/health
 
-                    echo "=== Application smoke test passed ==="
+                    echo ""
+                    echo "=== Smoke Test Passed ==="
                 '''
             }
         }
@@ -285,20 +325,27 @@ pipeline {
     post {
         success {
             echo '''
-                Pipeline completed successfully.
-
-                Unit tests, security scans, Docker build,
-                Kubernetes deployment, monitoring verification,
-                and application smoke test passed.
+            ==========================================
+                       PIPELINE SUCCEEDED
+            ==========================================
+            Unit tests passed.
+            Security scans passed.
+            Docker image built and scanned.
+            Application deployed to local Kind.
+            Monitoring configuration verified.
+            Application health check passed.
+            ==========================================
             '''
         }
 
         failure {
             echo '''
-                Pipeline failed.
-
-                Check the first failed stage in the Jenkins
-                console output and resolve the reported issue.
+            ==========================================
+                       PIPELINE FAILED
+            ==========================================
+            Check the first failed stage in the Jenkins
+            console output and resolve the reported issue.
+            ==========================================
             '''
         }
 

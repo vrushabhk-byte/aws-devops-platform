@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: flask-api
-          image: IMAGE_PLACEHOLDER
+          image: aws-devops-platform:local
           imagePullPolicy: IfNotPresent
           ports:
             - name: http

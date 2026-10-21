@@ -72,15 +72,19 @@ pipeline {
                 sh '''
                     set -eu
 
+                    echo "=== Scanning project source and configuration ==="
+
                     trivy fs \
                       --no-progress \
                       --scanners vuln,misconfig,secret \
+                      --tf-exclude-downloaded-modules \
                       --exit-code 1 \
                       --severity HIGH,CRITICAL \
                       --ignore-unfixed \
                       --skip-dirs .git \
                       --skip-dirs .venv \
                       --skip-dirs .pytest_cache \
+                      --skip-dirs terraform/.terraform \
                       .
                 '''
             }

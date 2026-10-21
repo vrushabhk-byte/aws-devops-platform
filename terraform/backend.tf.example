@@ -1,0 +1,13 @@
+# Optional: copy this file to backend.tf and replace the example bucket/key/region.
+# First create the S3 bucket separately, with versioning, encryption and public-access
+# blocking enabled. Then run `terraform init -migrate-state`.
+#
+# terraform {
+#   backend "s3" {
+#     bucket       = "REPLACE_WITH_YOUR_UNIQUE_STATE_BUCKET"
+#     key          = "aws-devops-platform/dev/terraform.tfstate"
+#     region       = "ap-south-1"
+#     encrypt      = true
+#     use_lockfile = true
+#   }
+# }

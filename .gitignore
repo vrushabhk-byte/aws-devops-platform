@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+terraform/terraform.tfvars
+terraform/backend.tf
+
+# Local/editor
+.env
+.env.*
+!.env.example
+.DS_Store
+.vscode/
+.idea/

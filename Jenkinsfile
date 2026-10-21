@@ -39,15 +39,22 @@ pipeline {
                     echo "=== Terraform ==="
                     terraform version
 
+                    echo "=== Python ==="
+                    python3 --version
+
+                    echo "=== Pytest ==="
+                    python3 -m pytest --version
+
                     echo "=== kubectl ==="
                     kubectl --kubeconfig="$KUBECONFIG" version --client
 
                     echo "=== Kind cluster ==="
                     kind get clusters
 
+                    echo "=== Kubernetes nodes ==="
                     kubectl --kubeconfig="$KUBECONFIG" \
-                        get nodes \
-                        --context="kind-$KIND_CLUSTER"
+                        --context="kind-$KIND_CLUSTER" \
+                        get nodes
                 '''
             }
         }
@@ -57,13 +64,21 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Installing Python dependencies ==="
+                    echo "=== Installing application dependencies ==="
+
                     python3 -m pip install \
                         --break-system-packages \
                         -r requirements.txt
 
-                    echo "=== Running unit tests ==="
-                    python3 -m unittest discover -s tests -v
+                    echo "=== Installing development dependencies ==="
+
+                    python3 -m pip install \
+                        --break-system-packages \
+                        -r requirements-dev.txt
+
+                    echo "=== Running pytest ==="
+
+                    python3 -m pytest -v
                 '''
             }
         }
@@ -73,13 +88,15 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Scanning repository with Trivy ==="
+                    echo "=== Scanning source code with Trivy ==="
 
                     trivy fs \
                         --scanners vuln,misconfig,secret \
                         --severity HIGH,CRITICAL \
                         --exit-code 1 \
                         --skip-dirs .git \
+                        --skip-dirs .venv \
+                        --skip-dirs .pytest_cache \
                         .
                 '''
             }
@@ -121,7 +138,7 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Loading Docker image into Kind ==="
+                    echo "=== Loading image into Kind ==="
 
                     kind load docker-image \
                         "$IMAGE_NAME:$IMAGE_TAG" \
@@ -141,7 +158,7 @@ pipeline {
                         --context="kind-$KIND_CLUSTER" \
                         apply -f k8s/
 
-                    echo "=== Waiting for deployment rollout ==="
+                    echo "=== Waiting for application rollout ==="
 
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
@@ -149,13 +166,20 @@ pipeline {
                         --namespace "$K8S_NAMESPACE" \
                         --timeout=180s
 
-                    echo "=== Checking application pods ==="
+                    echo "=== Application pods ==="
 
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
                         get pods \
                         --namespace "$K8S_NAMESPACE" \
                         -o wide
+
+                    echo "=== Application service ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                        --context="kind-$KIND_CLUSTER" \
+                        get service flask-api \
+                        --namespace "$K8S_NAMESPACE"
                 '''
             }
         }
@@ -171,11 +195,13 @@ pipeline {
                         --context="kind-$KIND_CLUSTER" \
                         get namespace "$MONITORING_NAMESPACE"
 
-                    echo "=== Checking monitoring CRDs ==="
+                    echo "=== Checking ServiceMonitor CRD ==="
 
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
                         get crd servicemonitors.monitoring.coreos.com
+
+                    echo "=== Checking PrometheusRule CRD ==="
 
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
@@ -211,15 +237,14 @@ pipeline {
 
                     echo "=== Verifying PrometheusRule ==="
 
-                    # The resource name must match metadata.name in
-                    # monitoring/alerts/flask-alerts.yaml.
+                    # Must match metadata.name in flask-alerts.yaml.
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
                         get prometheusrule flask-application-alerts \
                         --namespace "$MONITORING_NAMESPACE" \
                         -o yaml
 
-                    echo "=== Checking configured alert names ==="
+                    echo "=== Listing configured alert names ==="
 
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
@@ -235,14 +260,7 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Checking Kubernetes service ==="
-
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                        --context="kind-$KIND_CLUSTER" \
-                        get service flask-api \
-                        --namespace "$K8S_NAMESPACE"
-
-                    echo "=== Testing application health endpoint ==="
+                    echo "=== Testing Flask health endpoint ==="
 
                     kubectl --kubeconfig="$KUBECONFIG" \
                         --context="kind-$KIND_CLUSTER" \
@@ -258,7 +276,7 @@ pipeline {
                         --max-time 10 \
                         http://flask-api/health
 
-                    echo "=== Smoke test completed successfully ==="
+                    echo "=== Application smoke test passed ==="
                 '''
             }
         }
@@ -269,8 +287,9 @@ pipeline {
             echo '''
                 Pipeline completed successfully.
 
-                Application deployment, monitoring configuration,
-                security scans, and smoke tests passed.
+                Unit tests, security scans, Docker build,
+                Kubernetes deployment, monitoring verification,
+                and application smoke test passed.
             '''
         }
 
@@ -278,8 +297,8 @@ pipeline {
             echo '''
                 Pipeline failed.
 
-                Review the failed stage in the Jenkins console output.
-                Fix the underlying issue before rerunning the pipeline.
+                Check the first failed stage in the Jenkins
+                console output and resolve the reported issue.
             '''
         }
 

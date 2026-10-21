@@ -8,6 +8,8 @@ This repository is published for portfolio and demonstration purposes only. No p
 
 Viewing or accessing this public repository does not grant permission to reuse its source code. Third-party components, dependencies, and other materials remain subject to their respective licenses.
 
+## Project Overview
+
 An end-to-end DevOps portfolio project that demonstrates how to test, scan, build, deploy, and monitor a containerized Flask API using Jenkins, Docker, Trivy, Kubernetes (Kind), Prometheus, and Grafana.
 
 The repository also contains Terraform configuration for a proposed AWS VPC and Amazon EKS environment. The Terraform configuration has been formatted, initialized, and validated, but **the AWS infrastructure has not been deployed**. The working CI/CD demonstration currently runs locally on Ubuntu.

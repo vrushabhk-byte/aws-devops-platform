@@ -1,5 +1,13 @@
 # Local DevOps Platform with AWS Infrastructure Design
 
+⚠️ COPYRIGHT NOTICE — ALL RIGHTS RESERVED
+
+Copyright © 2026 Vrushabh Kothari. All rights reserved.
+
+This repository is published for portfolio and demonstration purposes only. No permission is granted to copy, reproduce, modify, distribute, sublicense, or commercially use the original source code without prior written permission from the copyright holder, except where permitted by applicable law.
+
+Viewing or accessing this public repository does not grant permission to reuse its source code. Third-party components, dependencies, and other materials remain subject to their respective licenses.
+
 An end-to-end DevOps portfolio project that demonstrates how to test, scan, build, deploy, and monitor a containerized Flask API using Jenkins, Docker, Trivy, Kubernetes (Kind), Prometheus, and Grafana.
 
 The repository also contains Terraform configuration for a proposed AWS VPC and Amazon EKS environment. The Terraform configuration has been formatted, initialized, and validated, but **the AWS infrastructure has not been deployed**. The working CI/CD demonstration currently runs locally on Ubuntu.
@@ -375,14 +383,3 @@ Review the error output and the relevant variable/module versions. Validation al
 - Integrate AWS Secrets Manager or an external secrets solution.
 - Add backup and disaster-recovery tests.
 
-## Copyright and Usage Restrictions
-
-Copyright © 2026 Vrushabh Kothari. All rights reserved.
-
-This repository is published for portfolio and demonstration purposes only.
-
-No permission is granted to copy, reproduce, modify, distribute, sublicense, or commercially use the original source code without prior written permission from the copyright holder, except where permitted by applicable law.
-
-Viewing or accessing this public repository does not grant permission to reuse its source code.
-
-Third-party components, dependencies, and other materials remain subject to their respective licenses.

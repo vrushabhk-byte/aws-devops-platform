@@ -375,6 +375,14 @@ Review the error output and the relevant variable/module versions. Validation al
 - Integrate AWS Secrets Manager or an external secrets solution.
 - Add backup and disaster-recovery tests.
 
-## License
+## Copyright and Usage Restrictions
 
-This repository is a learning and portfolio project. Add a `LICENSE` file if you intend to grant explicit reuse permissions.
+Copyright © 2026 Vrushabh Kothari. All rights reserved.
+
+This repository is published for portfolio and demonstration purposes only.
+
+No permission is granted to copy, reproduce, modify, distribute, sublicense, or commercially use the original source code without prior written permission from the copyright holder, except where permitted by applicable law.
+
+Viewing or accessing this public repository does not grant permission to reuse its source code.
+
+Third-party components, dependencies, and other materials remain subject to their respective licenses.

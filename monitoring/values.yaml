@@ -1,0 +1,75 @@
+# --------------------------------------------------
+# kube-prometheus-stack configuration
+# Local Kind Kubernetes cluster
+# --------------------------------------------------
+
+grafana:
+  enabled: true
+
+  admin:
+    existingSecret: grafana-admin-credentials
+    userKey: admin-user
+    passwordKey: admin-password
+
+  persistence:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+prometheus:
+  enabled: true
+
+  prometheusSpec:
+    retention: 3d
+
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+
+    # Monitor ServiceMonitor resources created
+    # in the local Kubernetes cluster.
+    serviceMonitorSelectorNilUsesHelmValues: false
+
+    # Keep local metrics storage ephemeral.
+    # This is appropriate for a development cluster.
+    storageSpec: {}
+
+alertmanager:
+  enabled: true
+
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+# Keep monitoring data ephemeral in this local project.
+# Recreating the cluster or its pods can lose stored metrics.

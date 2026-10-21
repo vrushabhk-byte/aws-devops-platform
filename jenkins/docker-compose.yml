@@ -1,0 +1,33 @@
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aws-devops-jenkins
+    restart: unless-stopped
+
+    user: root
+
+    ports:
+      - "8081:8080"
+      - "50000:50000"
+
+    environment:
+      JAVA_OPTS: "-Djenkins.install.runSetupWizard=true"
+
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/kubeconfig:/root/.kube/config:ro
+      - ../../:/workspace
+
+    networks:
+      - kind
+
+volumes:
+  jenkins_home:
+
+networks:
+  kind:
+    external: true
+    name: kind

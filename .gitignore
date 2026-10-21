@@ -23,3 +23,8 @@ terraform/backend.tf
 .DS_Store
 .vscode/
 .idea/
+
+# Jenkins local configuration and credentials
+jenkins/config/
+jenkins/secrets/
+jenkins/.env

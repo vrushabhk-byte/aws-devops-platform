@@ -9,23 +9,44 @@ pipeline {
     }
 
     environment {
-        AWS_REGION       = 'ap-south-1'
-        EKS_CLUSTER_NAME = 'aws-devops-platform'
-        ECR_REPOSITORY   = 'aws-devops-platform'
-        K8S_NAMESPACE    = 'production'
-        IMAGE_NAME       = 'flask-api'
+        K8S_NAMESPACE = 'production'
+        IMAGE_NAME    = 'aws-devops-platform'
+        IMAGE_TAG     = 'local'
+        KUBECONFIG    = '/root/.kube/config'
     }
 
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
-                script {
-                    env.IMAGE_TAG = sh(
-                        script: 'git rev-parse --short=7 HEAD',
-                        returnStdout: true
-                    ).trim()
-                }
+
+                sh '''
+                    set -eu
+                    echo "Git revision:"
+                    git rev-parse --short=7 HEAD
+                    echo "Project workspace: $WORKSPACE"
+                '''
+            }
+        }
+
+        stage('Validate Toolchain') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "=== Python ==="
+                    python3 --version
+
+                    echo "=== Docker ==="
+                    docker version
+
+                    echo "=== Kubernetes ==="
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get nodes
+
+                    echo "=== Trivy ==="
+                    trivy --version
+                '''
             }
         }
 
@@ -33,12 +54,15 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    python3 --version
+
                     python3 -m venv .venv
                     . .venv/bin/activate
-                    python -m pip install --upgrade pip
-                    pip install -r requirements-dev.txt
-                    pytest -v
+
+                    python -m pip install \
+                      --disable-pip-version-check \
+                      -r requirements-dev.txt
+
+                    python -m pytest -v
                 '''
             }
         }
@@ -47,19 +71,36 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    trivy fs --no-progress --exit-code 1 --severity HIGH,CRITICAL \
-                      --ignore-unfixed .
+
+                    trivy fs \
+                      --no-progress \
+                      --scanners vuln,misconfig,secret \
+                      --exit-code 1 \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --skip-dirs .git \
+                      --skip-dirs .venv \
+                      --skip-dirs .pytest_cache \
+                      .
                 '''
             }
         }
 
-        stage('Build Image') {
+        stage('Build Docker Image') {
             steps {
                 sh '''
                     set -eu
-                    docker build --pull \
-                      --label org.opencontainers.image.revision="$IMAGE_TAG" \
-                      -t "$IMAGE_NAME:$IMAGE_TAG" .
+
+                    docker build \
+                      --label "org.opencontainers.image.revision=$(git rev-parse HEAD)" \
+                      --label "org.opencontainers.image.title=aws-devops-platform" \
+                      -t "$IMAGE_NAME:$IMAGE_TAG" \
+                      .
+                '''
+
+                sh '''
+                    set -eu
+                    docker image inspect "$IMAGE_NAME:$IMAGE_TAG"
                 '''
             }
         }
@@ -68,51 +109,46 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    trivy image --no-progress --exit-code 1 --severity HIGH,CRITICAL \
-                      --ignore-unfixed "$IMAGE_NAME:$IMAGE_TAG"
+
+                    trivy image \
+                      --no-progress \
+                      --exit-code 1 \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      "$IMAGE_NAME:$IMAGE_TAG"
                 '''
             }
         }
 
-        stage('Push to Amazon ECR') {
+        stage('Load Image into Kind') {
             steps {
                 sh '''
                     set -eu
-                    AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-                    ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-                    ECR_URI="${ECR_REGISTRY}/${ECR_REPOSITORY}"
 
-                    aws ecr get-login-password --region "$AWS_REGION" \
-                      | docker login --username AWS --password-stdin "$ECR_REGISTRY"
-
-                    docker tag "$IMAGE_NAME:$IMAGE_TAG" "$ECR_URI:$IMAGE_TAG"
-                    docker push "$ECR_URI:$IMAGE_TAG"
-
-                    echo "$ECR_URI:$IMAGE_TAG" > image-uri.txt
+                    kind load docker-image "$IMAGE_NAME:$IMAGE_TAG" \
+                      --name aws-devops-local
                 '''
-                archiveArtifacts artifacts: 'image-uri.txt', fingerprint: true
             }
         }
 
-        stage('Deploy to EKS') {
+        stage('Deploy to Kubernetes') {
             steps {
                 sh '''
                     set -eu
-                    AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-                    ECR_URI="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}"
 
-                    aws eks update-kubeconfig \
-                      --region "$AWS_REGION" \
-                      --name "$EKS_CLUSTER_NAME"
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      apply -f k8s/namespace.yaml
 
-                    kubectl apply -f k8s/namespace.yaml
-                    kubectl apply -f k8s/service.yaml
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      apply -f k8s/deployment.yaml
 
-                    sed "s|IMAGE_PLACEHOLDER|${ECR_URI}:${IMAGE_TAG}|g" \
-                      k8s/deployment.yaml | kubectl apply -f -
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      apply -f k8s/service.yaml
 
-                    kubectl rollout status deployment/flask-api \
-                      --namespace "$K8S_NAMESPACE" --timeout=5m
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      rollout status deployment/flask-api \
+                      --namespace "$K8S_NAMESPACE" \
+                      --timeout=180s
                 '''
             }
         }
@@ -121,21 +157,69 @@ pipeline {
             steps {
                 sh '''
                     set -eu
-                    kubectl get pods -n "$K8S_NAMESPACE" -o wide
-                    kubectl get service flask-api -n "$K8S_NAMESPACE"
-                    kubectl run "smoke-test-${BUILD_NUMBER}" \
+
+                    echo "=== Deployment ==="
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get deployment flask-api \
+                      -n "$K8S_NAMESPACE"
+
+                    echo "=== Pods ==="
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get pods -n "$K8S_NAMESPACE" -o wide
+
+                    echo "=== Service ==="
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get service flask-api -n "$K8S_NAMESPACE"
+
+                    echo "=== Application endpoints ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      run "smoke-test-${BUILD_NUMBER}" \
                       --namespace "$K8S_NAMESPACE" \
                       --image=curlimages/curl:8.12.1 \
                       --restart=Never \
-                      --command -- sh -c \
-                      'for i in $(seq 1 20); do curl -fsS http://flask-api/health && exit 0; sleep 3; done; exit 1'
-                    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded \
+                      --image-pull-policy=IfNotPresent \
+                      --command -- sh -c '
+                        set -eu
+
+                        for i in $(seq 1 30); do
+                          if curl -fsS http://flask-api/health; then
+                            echo
+                            break
+                          fi
+                          sleep 2
+                        done
+
+                        curl -fsS http://flask-api/ready
+                        echo
+
+                        curl -fsS http://flask-api/
+                        echo
+                      '
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      wait \
+                      --for=jsonpath='{.status.phase}'=Succeeded \
                       "pod/smoke-test-${BUILD_NUMBER}" \
-                      --namespace "$K8S_NAMESPACE" --timeout=90s
-                    kubectl logs "smoke-test-${BUILD_NUMBER}" -n "$K8S_NAMESPACE"
-                    kubectl delete pod "smoke-test-${BUILD_NUMBER}" \
-                      --namespace "$K8S_NAMESPACE" --ignore-not-found=true
+                      --namespace "$K8S_NAMESPACE" \
+                      --timeout=120s
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      logs "smoke-test-${BUILD_NUMBER}" \
+                      --namespace "$K8S_NAMESPACE"
                 '''
+            }
+
+            post {
+                always {
+                    sh '''
+                        kubectl --kubeconfig="$KUBECONFIG" \
+                          delete pod "smoke-test-${BUILD_NUMBER}" \
+                          --namespace "$K8S_NAMESPACE" \
+                          --ignore-not-found=true \
+                          --wait=false || true
+                    '''
+                }
             }
         }
     }
@@ -143,13 +227,14 @@ pipeline {
     post {
         always {
             sh 'rm -rf .venv || true'
-            cleanWs deleteDirs: true, notFailBuild: true
         }
+
         success {
-            echo 'Build, scan, push, deployment, and smoke test completed successfully.'
+            echo 'SUCCESS: Tests, security scans, Docker build, Kubernetes deployment, and smoke tests completed.'
         }
+
         failure {
-            echo 'Pipeline failed. Review the stage logs before retrying or rolling back.'
+            echo 'FAILURE: Review the failed stage logs before retrying.'
         }
     }
 }

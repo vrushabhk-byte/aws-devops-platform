@@ -105,6 +105,7 @@ pipeline {
                         --skip-dirs .venv \
                         --skip-dirs .pytest_cache \
                         --skip-dirs terraform/.terraform \
+                        --tf-exclude-downloaded-modules \
                         .
                 '''
             }

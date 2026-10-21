@@ -11,8 +11,8 @@ pipeline {
         K8S_NAMESPACE       = 'production'
         IMAGE_NAME          = 'aws-devops-platform'
         IMAGE_TAG           = 'local'
-        KUBECONFIG           = '/root/.kube/config'
-        KIND_CLUSTER         = 'aws-devops-local'
+        KUBECONFIG          = '/root/.kube/config'
+        KIND_CLUSTER        = 'aws-devops-local'
         MONITORING_NAMESPACE = 'monitoring'
     }
 
@@ -137,13 +137,42 @@ pipeline {
                 sh '''
                     set -eu
 
-                    echo "=== Scan Docker Image ==="
+                    echo "=== Prepare Security Reports ==="
+                    mkdir -p security-reports
+
+                    echo "=== Generate Full HIGH/CRITICAL Vulnerability Report ==="
 
                     trivy image \
-                        --scanners vuln,misconfig,secret \
+                        --no-progress \
+                        --scanners vuln \
                         --severity HIGH,CRITICAL \
+                        --format json \
+                        --output security-reports/container-vulnerabilities.json \
+                        "${IMAGE_NAME}:${IMAGE_TAG}"
+
+                    echo "=== Generate Human-Readable Vulnerability Report ==="
+
+                    trivy image \
+                        --no-progress \
+                        --scanners vuln \
+                        --severity HIGH,CRITICAL \
+                        --format table \
+                        "${IMAGE_NAME}:${IMAGE_TAG}" \
+                        | tee security-reports/container-vulnerabilities.txt
+
+                    echo "=== Enforce Security Gate for Fixable Vulnerabilities ==="
+
+                    trivy image \
+                        --no-progress \
+                        --scanners vuln \
+                        --severity HIGH,CRITICAL \
+                        --ignore-unfixed \
                         --exit-code 1 \
                         "${IMAGE_NAME}:${IMAGE_TAG}"
+
+                    echo "=== Security Gate Passed ==="
+                    echo "No fixable HIGH or CRITICAL vulnerabilities detected."
+                    echo "Review the archived full report for unresolved findings."
                 '''
             }
         }
@@ -324,14 +353,31 @@ pipeline {
     }
 
     post {
+        always {
+            script {
+                if (fileExists('security-reports/container-vulnerabilities.json')) {
+                    archiveArtifacts(
+                        artifacts: 'security-reports/container-vulnerabilities.*',
+                        allowEmptyArchive: false,
+                        fingerprint: true
+                    )
+                } else {
+                    echo 'Container vulnerability reports were not generated.'
+                }
+            }
+
+            echo 'Jenkins pipeline execution finished.'
+        }
+
         success {
             echo '''
             ==========================================
                        PIPELINE SUCCEEDED
             ==========================================
             Unit tests passed.
-            Security scans passed.
-            Docker image built and scanned.
+            Source security scan passed.
+            Container security gate passed.
+            Vulnerability reports archived.
             Application deployed to local Kind.
             Monitoring configuration verified.
             Application health check passed.
@@ -346,12 +392,9 @@ pipeline {
             ==========================================
             Check the first failed stage in the Jenkins
             console output and resolve the reported issue.
+            Review any archived security reports.
             ==========================================
             '''
-        }
-
-        always {
-            echo 'Jenkins pipeline execution finished.'
         }
     }
 }

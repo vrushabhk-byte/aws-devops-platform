@@ -13,6 +13,8 @@ pipeline {
         IMAGE_NAME    = 'aws-devops-platform'
         IMAGE_TAG     = 'local'
         KUBECONFIG    = '/root/.kube/config'
+        KIND_CLUSTER  = 'aws-devops-local'
+        MONITORING_NAMESPACE = 'monitoring'
     }
 
     stages {
@@ -41,8 +43,7 @@ pipeline {
                     docker version
 
                     echo "=== Kubernetes ==="
-                    kubectl --kubeconfig="$KUBECONFIG" \
-                      get nodes
+                    kubectl --kubeconfig="$KUBECONFIG" get nodes
 
                     echo "=== Trivy ==="
                     trivy --version
@@ -130,7 +131,7 @@ pipeline {
                     set -eu
 
                     kind load docker-image "$IMAGE_NAME:$IMAGE_TAG" \
-                      --name aws-devops-local
+                      --name "$KIND_CLUSTER"
                 '''
             }
         }
@@ -153,6 +154,66 @@ pipeline {
                       rollout status deployment/flask-api \
                       --namespace "$K8S_NAMESPACE" \
                       --timeout=180s
+                '''
+            }
+        }
+
+        stage('Deploy Monitoring Configuration') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "=== Checking Prometheus Operator CRDs ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get crd servicemonitors.monitoring.coreos.com
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get crd prometheusrules.monitoring.coreos.com
+
+                    echo "=== Checking monitoring namespace ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get namespace "$MONITORING_NAMESPACE"
+
+                    echo "=== Applying Flask ServiceMonitor ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      apply -f monitoring/flask-servicemonitor.yaml
+
+                    echo "=== Applying Flask Prometheus alert rules ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      apply -f monitoring/alerts/flask-alerts.yaml
+                '''
+            }
+        }
+
+        stage('Verify Monitoring Configuration') {
+            steps {
+                sh '''
+                    set -eu
+
+                    echo "=== Verifying ServiceMonitor ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get servicemonitor flask-api \
+                      --namespace "$MONITORING_NAMESPACE" \
+                      -o yaml
+
+                    echo "=== Verifying PrometheusRule ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get prometheusrule flask-alerts \
+                      --namespace "$MONITORING_NAMESPACE" \
+                      -o yaml
+
+                    echo "=== Checking configured alert names ==="
+
+                    kubectl --kubeconfig="$KUBECONFIG" \
+                      get prometheusrule flask-alerts \
+                      --namespace "$MONITORING_NAMESPACE" \
+                      -o jsonpath='{range .spec.groups[*].rules[*]}{.alert}{"\\n"}{end}'
                 '''
             }
         }
@@ -234,7 +295,7 @@ pipeline {
         }
 
         success {
-            echo 'SUCCESS: Tests, security scans, Docker build, Kubernetes deployment, and smoke tests completed.'
+            echo 'SUCCESS: Tests, security scans, Docker build, Kubernetes deployment, monitoring configuration, and smoke tests completed.'
         }
 
         failure {

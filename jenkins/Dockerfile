@@ -4,6 +4,8 @@ USER root
 
 ARG TARGETARCH=amd64
 ARG KIND_VERSION=v0.29.0
+ARG TRIVY_VERSION=0.76.0
+ARG TERRAFORM_VERSION=1.16.6
 
 # Install Python, Git, Docker CLI prerequisites and utilities.
 RUN apt-get update && \
@@ -36,19 +38,17 @@ RUN apt-get update && \
 RUN curl -fsSL \
     "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/${TARGETARCH}/kubectl" \
     -o /usr/local/bin/kubectl && \
-    chmod +x /usr/local/bin/kubectl
+    chmod 0755 /usr/local/bin/kubectl && \
+    kubectl version --client
 
-# Install Kind v0.29.0 to match the host installation.
+# Install Kind.
 RUN curl -fsSL \
     "https://kind.sigs.k8s.io/dl/${KIND_VERSION}/kind-linux-${TARGETARCH}" \
     -o /usr/local/bin/kind && \
-    chmod +x /usr/local/bin/kind && \
+    chmod 0755 /usr/local/bin/kind && \
     kind version
 
 # Install Trivy.
-# Install Trivy.
-ARG TRIVY_VERSION=0.76.0
-
 RUN set -eux; \
     case "${TARGETARCH}" in \
         amd64) TRIVY_ARCH="64bit" ;; \
@@ -62,6 +62,21 @@ RUN set -eux; \
     chmod 0755 /usr/local/bin/trivy; \
     rm -f /tmp/trivy.tar.gz; \
     /usr/local/bin/trivy --version
+
+# Install Terraform.
+RUN set -eux; \
+    case "${TARGETARCH}" in \
+        amd64) TERRAFORM_ARCH="amd64" ;; \
+        arm64) TERRAFORM_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: ${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    curl -fsSL \
+        "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_${TERRAFORM_ARCH}.zip" \
+        -o /tmp/terraform.zip; \
+    unzip /tmp/terraform.zip -d /tmp/terraform; \
+    install -m 0755 /tmp/terraform/terraform /usr/local/bin/terraform; \
+    rm -rf /tmp/terraform /tmp/terraform.zip; \
+    terraform version
 
 # Allow Python virtual environments.
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1

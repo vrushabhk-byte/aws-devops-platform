@@ -28,3 +28,4 @@ terraform/backend.tf
 jenkins/config/
 jenkins/secrets/
 jenkins/.env
+commands.txt

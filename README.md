@@ -1,14 +1,30 @@
-# Production-Style AWS DevOps Platform
+# Local DevOps Platform with AWS Infrastructure Design
 
-A portfolio project demonstrating an end-to-end delivery workflow for a containerized Flask API on AWS:
+An end-to-end DevOps portfolio project that demonstrates how to test, scan, build, deploy, and monitor a containerized Flask API using Jenkins, Docker, Trivy, Kubernetes (Kind), Prometheus, and Grafana.
 
-**GitHub → Jenkins → Tests → Trivy scan → Docker build → Amazon ECR → Amazon EKS → Kubernetes Service → CloudWatch**
+The repository also contains Terraform configuration for a proposed AWS VPC and Amazon EKS environment. The Terraform configuration has been formatted, initialized, and validated, but **the AWS infrastructure has not been deployed**. The working CI/CD demonstration currently runs locally on Ubuntu.
 
-Infrastructure is provisioned with Terraform. The repository also includes Kubernetes manifests, automated tests, a Jenkins pipeline, and an optional GitHub Actions CI workflow.
+## Project status
 
-> **Scope note:** This is a production-style learning project, not a turnkey production platform. Review security, availability, compliance, capacity, and cost requirements before adapting it for real workloads.
+| Capability | Status |
+|---|---|
+| Flask API and automated tests | Implemented |
+| Jenkins pipeline | Passing locally |
+| Docker image build | Implemented |
+| Trivy source scan | Passing |
+| Trivy container vulnerability report | Generated and archived by Jenkins |
+| Container security gate | Fails on fixable HIGH/CRITICAL findings; unresolved findings remain reported |
+| Local Kubernetes deployment | Working on Kind |
+| Prometheus ServiceMonitor and alert rules | Applied and verified |
+| Application health check | Passing |
+| Terraform AWS configuration | Formatted and validated; not applied to AWS |
+| Amazon ECR / EKS deployment | Planned AWS path; not currently demonstrated |
+
+> **Security transparency:** the current base image scan reported unresolved HIGH-severity operating-system vulnerabilities. The pipeline preserves and archives the full report, while the gate fails on HIGH/CRITICAL vulnerabilities for which Trivy reports an available fix. This policy does not mean the image is vulnerability-free. Review the archived report and update the base image/packages when fixes become available.
 
 ## Architecture
+
+### Working local CI/CD flow
 
 ```text
 Developer
@@ -16,30 +32,53 @@ Developer
    v
 GitHub repository
    |
-   | webhook / push
    v
-Jenkins agent (Python, Docker, AWS CLI, kubectl, Trivy)
-   |-- 1. Install dependencies and run pytest
-   |-- 2. Scan source and container image with Trivy
-   |-- 3. Build Docker image tagged with Git commit
-   |-- 4. Push image to Amazon ECR
-   |-- 5. Update kubeconfig and deploy to Amazon EKS
-   |-- 6. Wait for rollout and check application health
+Jenkins Pipeline
+   |
+   +--> Checkout source
+   +--> Validate toolchain
+   +--> Run pytest
+   +--> Trivy source scan
+   +--> Build Docker image
+   +--> Trivy container scan
+   |       +--> JSON vulnerability report
+   |       +--> Text vulnerability report
+   |       +--> Security gate for fixable HIGH/CRITICAL findings
+   |
    v
-Amazon EKS
-   |-- Kubernetes Deployment (2 replicas)
-   |-- Kubernetes Service (LoadBalancer)
+Load image into local Kind cluster
+   |
    v
-AWS load balancer --> Flask API pods
-
-Terraform provisions:
-- VPC across two Availability Zones
-- Public and private subnets
-- One NAT Gateway (to reduce cost versus one per AZ)
-- Amazon EKS cluster and managed node group
-- Amazon ECR repository with image scanning and lifecycle policy
-- EKS control-plane logging
+Kubernetes namespace: production
+   |
+   +--> Deployment: flask-api (2 replicas)
+   +--> Service: flask-api
+   +--> /health smoke test
+   |
+   v
+Prometheus + Grafana monitoring stack
+   |
+   +--> ServiceMonitor
+   +--> PrometheusRule with application alerts
 ```
+
+### Intended AWS infrastructure design (not deployed)
+
+The `terraform/` directory describes an AWS architecture intended for a future deployment, including a VPC, subnets across Availability Zones, Amazon EKS, a managed node group, ECR, security groups, and VPC endpoints. The current Terraform configuration has passed `terraform fmt -check`, `terraform init -backend=false`, and `terraform validate`.
+
+Terraform validation checks configuration syntax and consistency; it does not prove that the infrastructure has been created, that all AWS permissions are correct, or that the deployment will work in an AWS account. No AWS deployment is claimed by this project.
+
+## Technology stack
+
+- **Application:** Python 3.12, Flask
+- **Testing:** pytest
+- **CI/CD:** Jenkins Pipeline, Git, GitHub
+- **Containers:** Docker
+- **Container security:** Trivy
+- **Local Kubernetes:** Kind, kubectl
+- **Monitoring:** Prometheus, Grafana, ServiceMonitor, PrometheusRule
+- **Infrastructure as Code:** Terraform
+- **Cloud design target:** AWS VPC, Amazon EKS, Amazon ECR, IAM, CloudWatch
 
 ## Repository layout
 
@@ -54,6 +93,16 @@ aws-devops-platform/
 │   ├── namespace.yaml
 │   ├── deployment.yaml
 │   └── service.yaml
+├── monitoring/
+│   ├── alerts/
+│   │   └── flask-alerts.yaml
+│   ├── flask-servicemonitor.yaml
+│   └── values.yaml
+├── jenkins/
+│   ├── config/
+│   │   └── kubeconfig
+│   ├── docker-compose.yml
+│   └── Dockerfile
 ├── terraform/
 │   ├── versions.tf
 │   ├── variables.tf
@@ -65,282 +114,267 @@ aws-devops-platform/
 │   ├── check-prerequisites.sh
 │   └── get-service-url.sh
 ├── .github/workflows/ci.yml
-├── .dockerignore
-├── .gitignore
 ├── Dockerfile
 ├── Jenkinsfile
 ├── requirements.txt
 ├── requirements-dev.txt
+├── pytest.ini
+├── CONTRIBUTING.md
 └── README.md
 ```
 
-## AWS resources and technologies
-
-- **Compute and containers:** Amazon EKS, EC2 managed node group, Docker
-- **Registry:** Amazon ECR
-- **Networking:** VPC, public/private subnets, route tables, Internet Gateway, NAT Gateway, security groups
-- **Identity:** IAM roles and policies managed by the EKS Terraform module
-- **Monitoring:** EKS control-plane logs in CloudWatch; Kubernetes/application metrics can be extended separately
-- **Infrastructure as Code:** Terraform modules
-- **CI/CD:** Jenkins, GitHub, optional GitHub Actions
-- **Security:** non-root container, health probes, ECR image scanning, Trivy, no secrets committed to Git
-
 ## Prerequisites
 
-Install/configure these before deploying:
+For the local demonstration, install or configure:
 
-1. An AWS account and an IAM identity allowed to create the resources in this project.
-2. AWS CLI v2 configured locally (`aws configure` or an approved SSO/role workflow).
-3. Terraform (1.5+).
-4. `kubectl`.
-5. Docker.
-6. Git.
-7. For the Jenkins pipeline: a Jenkins agent with Python 3.12, pip, Docker Engine access, AWS CLI v2, `kubectl`, and Trivy installed. The agent's AWS identity must have permission to push to ECR and access the EKS cluster.
+- Git
+- Python 3.12 and `venv`
+- Docker Engine and Docker Compose
+- Jenkins
+- Kind and kubectl
+- Terraform (for validating the AWS configuration)
+- Trivy
 
-Check the AWS identity and region:
+The Jenkins container and local Kind cluster must be able to communicate through the configured Docker network. Review `jenkins/docker-compose.yml`, `jenkins/Dockerfile`, and `Jenkinsfile` if your environment differs.
 
-```bash
-aws sts get-caller-identity
-aws configure get region
-```
+## Run the Flask application and tests locally
 
-The examples use `ap-south-1` (Mumbai). Change the region if you prefer another region.
-
-## 1. Clone and inspect the project
-
-```bash
-git clone https://github.com/<YOUR_GITHUB_USERNAME>/aws-devops-platform.git
-cd aws-devops-platform
-```
-
-Create your own GitHub repository and replace the URL above with your repository URL.
-
-## 2. Run the application and tests locally
-
-Use Python 3.12 if available:
+From the repository root:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt
 pytest -v
+```
+
+Start the API:
+
+```bash
 python -m flask --app app.main run --host 0.0.0.0 --port 5000
 ```
 
-In another terminal:
+In another terminal, check the health endpoint:
 
 ```bash
 curl http://127.0.0.1:5000/health
-curl http://127.0.0.1:5000/
 ```
 
-Expected health response:
+Expected response:
 
 ```json
 {"status":"healthy"}
 ```
 
-Stop the local server with `Ctrl+C`.
+Stop the server with `Ctrl+C`.
 
-## 3. Build and run the Docker image locally
+## Build and run the Docker image locally
+
+Build the image:
 
 ```bash
 docker build -t aws-devops-platform:local .
+```
+
+Run it:
+
+```bash
 docker run --rm -p 5000:5000 aws-devops-platform:local
 ```
 
-Then check `http://127.0.0.1:5000/health`. Stop the container with `Ctrl+C`.
-
-## 4. Provision AWS infrastructure with Terraform
-
-> **Important security step:** Before applying, set the EKS API endpoint allowlist to your current public IP. Do not leave the cluster API open to the internet.
-
-Get your public IP from a trusted IP-checking service or your network administrator, then create a Terraform variables file:
+Then test:
 
 ```bash
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
+curl http://127.0.0.1:5000/health
 ```
 
-Edit `terraform.tfvars` and set `cluster_endpoint_public_access_cidrs` to your public IP in CIDR form, for example:
+Stop the container with `Ctrl+C`.
 
-```hcl
-cluster_endpoint_public_access_cidrs = ["203.0.113.10/32"]
-```
+## Run the local Kubernetes demonstration
 
-`203.0.113.10` is an example documentation IP. Replace it with your real public IP. If your IP changes, update this allowlist before running Terraform again.
-
-Review the selected AWS region, EKS version, and node size in `terraform.tfvars` before proceeding.
+The local Kind cluster used for this project is named `aws-devops-local`. Confirm that it is available:
 
 ```bash
-terraform init
-terraform fmt -check
-terraform validate
-terraform plan -out=tfplan
-terraform apply tfplan
-```
-
-Keep `terraform.tfvars`, `tfplan`, state files, and any credentials out of Git. The included `.gitignore` excludes common Terraform local files.
-
-Terraform creates billable AWS resources. Review the plan before approving it.
-
-Get the outputs:
-
-```bash
-terraform output
-```
-
-Save the ECR repository URL and EKS cluster name for the Jenkins configuration. Return to the repository root when done:
-
-```bash
-cd ..
-```
-
-## 5. Configure kubectl
-
-Run from the repository root (change region/name if you changed the defaults):
-
-```bash
-aws eks update-kubeconfig --region ap-south-1 --name aws-devops-platform
+kind get clusters
+kubectl config current-context
 kubectl get nodes
-kubectl get namespaces
 ```
 
-If access is denied, check that the AWS identity used by `kubectl` is the identity that created the cluster or has been granted EKS access. Do not work around access problems by granting broad administrator permissions to every identity.
+The expected context is `kind-aws-devops-local`.
 
-## 6. Configure Jenkins
-
-### Required Jenkins agent tools
-
-The agent that runs this pipeline needs:
-
-- Git
-- Python 3.12 and pip
-- Docker CLI and access to a Docker daemon
-- AWS CLI v2
-- `kubectl`
-- Trivy
-
-Ensure the agent's AWS identity has:
-- ECR authentication and push permissions for the project's repository
-- permission to call `eks:DescribeCluster`
-- Kubernetes authorization to deploy to the target namespace
-
-Prefer an attached IAM role / temporary credentials (for example, an EC2 instance profile) over long-lived AWS access keys. If your Jenkins runs outside AWS, use your organization's approved OIDC/role-assumption approach. Do not commit credentials to this repository.
-
-### Create the Jenkins job
-
-1. Push this repository to GitHub.
-2. In Jenkins, create a **Pipeline** job.
-3. Configure the GitHub repository URL and branch (`main`).
-4. Select **Pipeline script from SCM**, SCM **Git**, and script path `Jenkinsfile`.
-5. Configure a GitHub webhook to trigger the job, or use a suitable SCM polling strategy.
-6. Ensure the Jenkins agent can reach the EKS API endpoint from its network. Add its egress IP to `cluster_endpoint_public_access_cidrs` if appropriate.
-7. Review the environment variables at the top of `Jenkinsfile` and update the region, cluster name, ECR repository, and namespace if you changed the Terraform defaults.
-8. Run the job.
-
-The pipeline runs tests, performs a filesystem scan, builds the image, scans the image, pushes it to ECR, deploys it to EKS, waits for rollout, and checks the health endpoint.
-
-**Security scanning behavior:** Trivy is configured to fail the pipeline on HIGH/CRITICAL findings. For a real team, tune exceptions through a documented security review rather than silently disabling the scanner.
-
-## 7. Check the deployment
+Inspect the application deployment and service:
 
 ```bash
 kubectl get deployments -n production
 kubectl get pods -n production
-kubectl get service -n production
+kubectl get services -n production
 kubectl rollout status deployment/flask-api -n production
 ```
 
-Get the load balancer address:
+The current pipeline loads the locally built image into Kind, deploys the `flask-api` workload with two replicas, and checks the application health endpoint.
+
+To inspect application logs:
 
 ```bash
-./scripts/get-service-url.sh production flask-api
-```
-
-The AWS load balancer can take a few minutes to provision. Once an external hostname appears, test:
-
-```bash
-curl http://<LOAD_BALANCER_HOSTNAME>/
-curl http://<LOAD_BALANCER_HOSTNAME>/health
-```
-
-Use HTTPS and a managed certificate/domain before exposing a real production service.
-
-## 8. Optional GitHub Actions CI
-
-`.github/workflows/ci.yml` runs unit tests and a source filesystem scan on pull requests and pushes. It does not deploy to AWS. The Jenkins pipeline is the deployment pipeline in this project.
-
-## 9. Terraform remote state (recommended for team use)
-
-The project uses local state by default so that the first deployment is easy to understand. For team use, create a dedicated, versioned, encrypted S3 bucket for Terraform state and enable native S3 state locking with `use_lockfile = true`.
-
-1. Create the state bucket separately with a unique name, encryption, versioning, and public-access blocking.
-2. Review `terraform/backend.tf.example`, copy it to `terraform/backend.tf`, and replace the example bucket/key/region with your own values.
-3. Run `terraform init -migrate-state` from `terraform/` and carefully review the migration prompt.
-4. Back up and protect state files; they can contain sensitive infrastructure data.
-
-Do not put backend credentials in the backend configuration. Use the AWS CLI's normal role/SSO credential chain. Do not create a shared state bucket using the same state it is supposed to store.
-
-## 10. Cost and cleanup
-
-This project creates billable resources, including an EKS cluster, EC2 worker nodes, NAT Gateway, ECR storage, and a Kubernetes LoadBalancer service. Actual charges vary by region, runtime, traffic, and instance sizes. The NAT Gateway, EKS control plane, worker nodes, and load balancer can continue to incur charges even when no application traffic is flowing.
-
-When finished, delete the Kubernetes Service first so AWS can release its load balancer, then destroy the Terraform infrastructure:
-
-```bash
-kubectl delete service flask-api -n production --ignore-not-found
-kubectl delete namespace production --ignore-not-found
-cd terraform
-terraform destroy
-```
-
-Review the destroy plan and confirm before proceeding. If the Terraform state is lost or resources were created outside Terraform, some resources may require manual cleanup. Do not delete the Terraform state until you have confirmed the AWS resources are removed.
-
-## Troubleshooting
-
-### `kubectl` cannot connect to the cluster
-- Confirm `aws sts get-caller-identity` returns the intended AWS identity.
-- Confirm the cluster is active and the region/name are correct.
-- Confirm your current public IP is included in the EKS endpoint allowlist.
-- Confirm the identity has EKS access and Kubernetes RBAC permissions.
-
-### Jenkins cannot reach EKS
-- Check the Jenkins agent's outbound IP and network path.
-- Add only the required agent IP/CIDR to the endpoint allowlist.
-- Confirm the agent role can describe the cluster and is authorized to deploy.
-
-### Image pull errors
-- Check the image URL/tag in the Deployment.
-- Confirm the worker-node role can pull from ECR.
-- Inspect pod events with `kubectl describe pod -n production <pod-name>`.
-
-### Deployment rollout fails
-```bash
-kubectl describe deployment flask-api -n production
-kubectl get pods -n production
-kubectl describe pod -n production <pod-name>
 kubectl logs -n production deployment/flask-api
 ```
 
-### LoadBalancer address is pending
+To inspect events if a rollout fails:
+
 ```bash
-kubectl describe service flask-api -n production
+kubectl get events -n production --sort-by=.lastTimestamp
+kubectl describe deployment flask-api -n production
+kubectl get pods -n production
+```
+
+## Jenkins pipeline
+
+The Jenkins job is named `aws-devops-platform`. The local Jenkins UI is available at `http://localhost:8081` when the configured Compose stack is running.
+
+The pipeline includes these stages:
+
+1. **Checkout** — retrieves the repository revision.
+2. **Validate Toolchain** — checks required tools and local cluster access.
+3. **Unit Tests** — runs the automated pytest suite.
+4. **Source Security Scan** — scans repository source and configuration with Trivy.
+5. **Build Docker Image** — builds the Flask API image.
+6. **Container Security Scan** — generates vulnerability reports and runs the security gate.
+7. **Load Image into Kind** — makes the built image available to the local cluster.
+8. **Deploy to Kubernetes** — deploys the application to the `production` namespace.
+9. **Deploy Monitoring Configuration** — applies the ServiceMonitor and alert rules.
+10. **Verify Monitoring Configuration** — checks that monitoring resources exist.
+11. **Smoke Test** — checks the application health endpoint.
+
+Run the job from Jenkins and review the console output. A successful run demonstrates the local workflow only; it does not indicate that an AWS environment has been provisioned.
+
+## Container vulnerability reporting
+
+The pipeline archives these reports as Jenkins build artifacts:
+
+- `security-reports/container-vulnerabilities.json`
+- `security-reports/container-vulnerabilities.txt`
+
+The reports include HIGH and CRITICAL findings. The security gate uses Trivy's `--ignore-unfixed` option, so it fails for HIGH/CRITICAL findings with fixes available according to the current vulnerability database. Unfixed findings can still appear in the full report.
+
+For a responsible review:
+
+1. Open the Jenkins build's archived artifacts.
+2. Inspect the text report for a quick summary.
+3. Use the JSON report for detailed finding data.
+4. Reassess the base image and packages when Debian security updates become available.
+5. Document any accepted risk and review exceptions rather than hiding findings.
+
+A passing gate means no findings matched that particular gate policy; it is not a guarantee that the image has no vulnerabilities.
+
+## Prometheus and Grafana
+
+The project uses a Prometheus/Grafana stack installed in the local Kubernetes cluster. The pipeline applies and verifies:
+
+- `monitoring/flask-servicemonitor.yaml`
+- `monitoring/alerts/flask-alerts.yaml`
+
+The alert rules include:
+
+- `FlaskApplicationUnavailable`
+- `FlaskHighHttp5xxErrorRate`
+- `FlaskHighP95Latency`
+- `FlaskContainerRestartingFrequently`
+
+Check the resources:
+
+```bash
+kubectl get servicemonitor -n monitoring
+kubectl get prometheusrule -n monitoring
+kubectl get pods -n monitoring
+```
+
+The monitoring stack and application metrics are part of the local demonstration. Access Prometheus or Grafana using the service names and ports configured by your Helm release and `monitoring/values.yaml`.
+
+## Terraform: AWS infrastructure design
+
+The Terraform files describe the intended AWS environment. To perform a local configuration check without provisioning resources:
+
+```bash
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform init -backend=false
+terraform -chdir=terraform validate
+```
+
+These commands do not create AWS resources.
+
+**Do not run `terraform apply` unless you intentionally want to deploy into an AWS account and have reviewed the plan, security configuration, and expected charges.** AWS resources such as EKS, worker nodes, NAT Gateway, ECR storage, and load balancers can incur charges.
+
+Before a real deployment, review at least:
+
+- AWS region, EKS version, and node sizing
+- Cluster API endpoint access and administrative access paths
+- IAM permissions and Kubernetes authorization
+- Network routing, security groups, and VPC endpoints
+- Terraform state storage, locking, backup, and access controls
+- Logging, monitoring, secrets management, and cost estimates
+- Cleanup procedures and resources created outside Terraform
+
+The current configuration is validated but not applied to AWS. Any future AWS deployment should be tested and documented separately.
+
+## Security and repository hygiene
+
+- Do not commit AWS credentials, kubeconfig credentials, Terraform state, plans, or `terraform.tfvars`.
+- Keep access to Jenkins and its Docker socket restricted; Docker socket access is highly privileged.
+- Review `jenkins/config/kubeconfig` before publishing. Do not publish a kubeconfig containing real credentials or private environment details.
+- Keep the local development virtual environment, caches, and generated reports out of Git unless intentionally publishing sanitized examples.
+- Review Trivy reports even when the configured gate passes.
+
+## Troubleshooting
+
+### Jenkins cannot access Kind
+
+```bash
+docker ps
+kind get clusters
+kubectl config current-context
+kubectl get nodes
+docker network inspect kind
+```
+
+Confirm the Jenkins container is attached to the expected `kind` network and has the intended kubeconfig mounted.
+
+### Application pods do not become ready
+
+```bash
+kubectl get pods -n production
+kubectl describe deployment flask-api -n production
+kubectl describe pod -n production <pod-name>
+kubectl logs -n production deployment/flask-api
 kubectl get events -n production --sort-by=.lastTimestamp
 ```
-Allow several minutes for AWS to provision the load balancer and verify that the AWS load-balancing components and cluster networking are healthy.
 
-## Suggested future enhancements
+Check the image name, image availability in Kind, container port, probes, and application logs.
 
-- AWS Load Balancer Controller with an Application Load Balancer and HTTPS
-- External Secrets integration with AWS Secrets Manager
-- Prometheus and Grafana or Amazon Managed Service for Prometheus
-- Deployment strategies such as canary or blue/green
-- Policy-as-code and Terraform security scanning
-- Separate dev/staging/prod environments and protected deployment approvals
-- EKS access through private endpoints/VPN and restricted network paths
-- Automated backup and disaster-recovery testing
+### Trivy reports vulnerabilities
+
+Review both archived reports and distinguish fixed from unfixed findings. Do not interpret a passing `--ignore-unfixed` gate as a vulnerability-free image.
+
+### Terraform validation fails
+
+```bash
+terraform -chdir=terraform fmt -check -recursive
+terraform -chdir=terraform init -backend=false
+terraform -chdir=terraform validate
+```
+
+Review the error output and the relevant variable/module versions. Validation alone does not prove that the AWS deployment will succeed.
+
+## Potential future improvements
+
+- Deploy the Terraform architecture into a dedicated AWS sandbox after a cost and security review.
+- Add a controlled ECR push and EKS deployment stage for AWS.
+- Add an explicit vulnerability exception process with expiry and ownership.
+- Add Terraform security scanning and policy-as-code.
+- Add deployment approvals and separate environments.
+- Configure HTTPS, managed certificates, and a suitable ingress/load-balancer controller.
+- Integrate AWS Secrets Manager or an external secrets solution.
+- Add backup and disaster-recovery tests.
 
 ## License
 
-This project is provided for educational and portfolio use. Add a license file if you want to grant explicit reuse permissions.
+This repository is a learning and portfolio project. Add a `LICENSE` file if you intend to grant explicit reuse permissions.

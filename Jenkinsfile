@@ -17,7 +17,6 @@ pipeline {
     }
 
     stages {
-
         stage('Checkout') {
             steps {
                 checkout scm
@@ -105,6 +104,7 @@ pipeline {
                         --skip-dirs .git \
                         --skip-dirs .venv \
                         --skip-dirs .pytest_cache \
+                        --skip-dirs terraform/.terraform \
                         .
                 '''
             }

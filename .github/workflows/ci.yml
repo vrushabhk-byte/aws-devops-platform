@@ -28,7 +28,7 @@ jobs:
         run: pytest -v
 
       - name: Scan source with Trivy
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.33.1
         with:
           scan-type: fs
           scan-ref: .
